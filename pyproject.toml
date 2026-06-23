@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-fp32-toolkit"
+version = "0.1.0"
+description = "Blackwell-tuned acceleration nodes for FP32 diffusion models (Z-Image-Turbo, etc.)"
+authors = [{name = "marduk191"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+readme = "README.md"
+
+[project.urls]
+Repository = "https://github.com/marduk191/comfyui-fp32-toolkit"
+
+[tool.comfy]
+PublisherId = "marduk191"
+DisplayName = "FP32 Toolkit (Blackwell)"
+Icon = ""
