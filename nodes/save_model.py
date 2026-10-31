@@ -19,6 +19,8 @@ import comfy.model_management as mm
 
 from safetensors.torch import save_file
 
+from ._common import __version__
+
 
 _DTYPE_MAP = {
     "keep":      None,
@@ -28,14 +30,6 @@ _DTYPE_MAP = {
     "fp8_e4m3fn": torch.float8_e4m3fn,
     "fp8_e5m2":  torch.float8_e5m2,
 }
-
-
-def _is_quantized(t):
-    """Detect torchao tensor subclasses without importing torchao."""
-    cls_name = type(t).__name__
-    return any(k in cls_name for k in (
-        "AffineQuantized", "NVFP4", "MXTensor", "Float8", "MXFP", "AQT", "LinearActivation"
-    )) and not isinstance(t, torch.nn.Parameter.__bases__[0]) is False  # keep simple
 
 
 def _maybe_dequantize(t):
@@ -87,7 +81,10 @@ class SaveDiffusionModel:
     OUTPUT_NODE = True
 
     def save(self, model, filename_prefix, save_dtype, quantized_handling, save_to, include_metadata):
-        mm.load_models_gpu([model])
+        if getattr(model, "is_dynamic", lambda: False)():
+            # DynamicVRAM patchers stream weights on demand; get a regular patcher holding real tensors.
+            model = model.clone(disable_dynamic=True)
+        mm.load_models_gpu([model])  # applies LoRA / weight patches
         diff = model.get_model_object("diffusion_model")
         # unwrap torch.compile
         diff = getattr(diff, "_orig_mod", diff)
@@ -148,7 +145,7 @@ class SaveDiffusionModel:
         if include_metadata:
             metadata = {
                 "format": "pt",
-                "fp32_toolkit_version": "0.1.0",
+                "fp32_toolkit_version": __version__,
                 "save_dtype": save_dtype,
                 "quantized_layers": str(n_quant),
                 "total_layers": str(n_total),
@@ -162,7 +159,8 @@ class SaveDiffusionModel:
 
         save_file(out_sd, out_path, metadata=metadata)
         size_mb = os.path.getsize(out_path) / 1e6
-        msg = f"[SaveDiffusionModel] wrote {n_total} tensors ({n_quant} dequantized) → {out_path} ({size_mb:.1f} MB)"
+        msg = (f"[SaveDiffusionModel] wrote {n_total} tensors ({n_quant} quantized, {quantized_handling}) "
+               f"-> {out_path} ({size_mb:.1f} MB)")
         print(msg)
         return (out_path,)
 

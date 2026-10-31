@@ -1,9 +1,12 @@
 """Step-skip caching for DiT (TeaCache-style rel-L1).
 
-Wraps the unet function. On each step, compares current input embedding vs.
-cached prev. If rel-L1 < threshold, returns cached output (skip compute).
+Wraps the unet function. On each sampling step, compares the current input vs. the cached
+previous input for the same cond/uncond batch. If rel-L1 < threshold, returns the cached output
+(skips compute).
 """
 import torch
+
+from ._common import chain_unet_wrapper
 
 
 class TeaCachePatch:
@@ -25,48 +28,46 @@ class TeaCachePatch:
 
     def patch(self, model, rel_l1_threshold, start_step, end_step):
         m = model.clone()
+        state = {}
 
-        state = {"prev_input": None, "prev_output": None, "step": 0, "skipped": 0}
-        prev_wrapper = m.model_options.get("model_function_wrapper")
+        def reset(*_args, **_kwargs):
+            if state.get("skipped"):
+                print(f"[TeaCache] skipped {state['skipped']}/{state['calls']} model calls")
+            state.clear()
+            state.update({"entries": {}, "step": -1, "last_t": None, "skipped": 0, "calls": 0})
 
-        def wrapper(apply_model, args):
-            x = args["input"]
-            t = args["timestep"]
-            step = state["step"]
-            state["step"] += 1
+        reset()
 
-            in_window = start_step <= step < end_step
-            should_skip = False
+        def factory(call_next):
+            def wrapper(apply_model, args):
+                x = args["input"]
+                t = args["timestep"]
+                t_val = float(t.flatten()[0])
+                if state["last_t"] != t_val:  # new sampling step (cond and uncond share a timestep)
+                    state["step"] += 1
+                    state["last_t"] = t_val
+                state["calls"] += 1
+                # Cache per cond/uncond batch layout so a cond output is never returned for uncond.
+                key = (tuple(args.get("cond_or_uncond", ())), tuple(x.shape))
+                entry = state["entries"].get(key)
 
-            if in_window and state["prev_input"] is not None:
-                with torch.no_grad():
-                    diff = (x - state["prev_input"]).abs().mean()
-                    base = state["prev_input"].abs().mean().clamp(min=1e-6)
-                    rel = (diff / base).item()
-                if rel < rel_l1_threshold and state["prev_output"].shape == x.shape:
-                    state["skipped"] += 1
-                    return state["prev_output"]
+                if entry is not None and start_step <= state["step"] < end_step:
+                    with torch.no_grad():
+                        prev_x = entry["input"]
+                        rel = ((x - prev_x).abs().mean() / prev_x.abs().mean().clamp(min=1e-6)).item()
+                    if rel < rel_l1_threshold:
+                        state["skipped"] += 1
+                        return entry["output"]
 
-            if prev_wrapper is not None:
-                out = prev_wrapper(apply_model, args)
-            else:
-                out = apply_model(x, t, **args["c"])
+                out = call_next(apply_model, args)
+                state["entries"][key] = {"input": x.detach(), "output": out.detach()}
+                return out
+            return wrapper
 
-            state["prev_input"] = x.detach()
-            state["prev_output"] = out.detach()
-            return out
-
-        # reset state at the start of each sampling run via on_sample callback
-        def reset_on_load(*a, **kw):
-            state["prev_input"] = None
-            state["prev_output"] = None
-            state["step"] = 0
-            state["skipped"] = 0
-
-        m.set_model_unet_function_wrapper(wrapper)
-        # ComfyUI calls model.cleanup() between runs; hook for state reset
+        chain_unet_wrapper(m, factory)
+        # pre_run fires at the start of every sampling run: drop state from the previous run.
         if hasattr(m, "add_callback"):
-            m.add_callback("on_pre_run", reset_on_load)
+            m.add_callback("on_pre_run", reset)
         return (m,)
 
 

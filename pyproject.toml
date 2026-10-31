@@ -1,16 +1,28 @@
 [project]
 name = "comfyui-fp32-toolkit"
-version = "0.1.0"
-description = "Blackwell-tuned acceleration nodes for FP32 diffusion models (Z-Image-Turbo, etc.)"
+version = "0.2.0"
+description = "Blackwell-tuned acceleration nodes for FP32 diffusion models (Z-Image-Turbo, etc.): selective precision, autocast, FP8/MXFP8/NVFP4 quantization, SDPA/SageAttention, torch.compile, TeaCache."
 authors = [{name = "marduk191"}]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 readme = "README.md"
+# torch / torchao / sageattention must match the user's CUDA build, so none are hard requirements.
+dependencies = []
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+
+[project.optional-dependencies]
+quant = ["torchao>=0.13"]
+sage = ["sageattention>=2.2"]
 
 [project.urls]
-Repository = "https://github.com/marduk191/comfyui-fp32-toolkit"
+Repository = "https://github.com/marduk191/comfyui-fp32_toolkit"
+Issues = "https://github.com/marduk191/comfyui-fp32_toolkit/issues"
 
 [tool.comfy]
 PublisherId = "marduk191"
 DisplayName = "FP32 Toolkit (Blackwell)"
 Icon = ""
+includes = []
