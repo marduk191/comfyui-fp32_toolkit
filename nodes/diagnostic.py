@@ -2,6 +2,8 @@
 import torch
 import comfy.model_management as mm
 
+from ._common import __version__
+
 
 class FP32ToolkitReport:
     @classmethod
@@ -15,7 +17,7 @@ class FP32ToolkitReport:
     OUTPUT_NODE = True
 
     def run(self, model):
-        lines = []
+        lines = [f"FP32 Toolkit: {__version__}"]
         cap = torch.cuda.get_device_capability() if torch.cuda.is_available() else (0, 0)
         lines.append(f"CUDA capability: sm_{cap[0]}{cap[1]}")
         lines.append(f"Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
@@ -44,8 +46,13 @@ class FP32ToolkitReport:
             lines.append("flash_attn: not installed")
 
         topts = model.model_options.get("transformer_options", {})
-        lines.append(f"transformer_options: {dict(topts)}")
+        lines.append(f"transformer_options keys: {sorted(str(k) for k in topts.keys())}")
+        if "attn_precision" in topts:
+            lines.append(f"attn_precision: {topts['attn_precision']}")
+        lines.append(f"attention override set: {'optimized_attention_override' in topts}")
         lines.append(f"model_function_wrapper set: {model.model_options.get('model_function_wrapper') is not None}")
+        lines.append(f"torch.compile wrapper set: {'torch_compile_kwargs' in model.model_options}")
+        lines.append(f"DynamicVRAM patcher: {getattr(model, 'is_dynamic', lambda: False)()}")
 
         try:
             diff = model.get_model_object("diffusion_model")

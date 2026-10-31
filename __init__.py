@@ -18,5 +18,4 @@ from .nodes.save_model import NODE_CLASS_MAPPINGS as _SV, NODE_DISPLAY_NAME_MAPP
 NODE_CLASS_MAPPINGS = {**_GS, **_LD, **_AC, **_SC, **_AT, **_QT, **_CP, **_MM, **_CA, **_PR, **_DG, **_SV}
 NODE_DISPLAY_NAME_MAPPINGS = {**_GSD, **_LDD, **_ACD, **_SCD, **_ATD, **_QTD, **_CPD, **_MMD, **_CAD, **_PRD, **_DGD, **_SVD}
 
-WEB_DIRECTORY = "./web"
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

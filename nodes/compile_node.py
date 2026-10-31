@@ -3,6 +3,8 @@ import os
 import torch
 import comfy.model_management as mm
 
+from ._common import clone_for_weight_edit, log
+
 try:
     from comfy_api.torch_helpers import set_torch_compile_wrapper
     _HAS_COMPILE_HELPER = True
@@ -14,6 +16,23 @@ _INDUCTOR_ENV = {
     "TORCHINDUCTOR_FX_GRAPH_CACHE": "1",
     "TORCHINDUCTOR_AUTOGRAD_CACHE": "1",
 }
+
+
+def _skip_transformer_options_guards(guard_entries):
+    # Same filter as core TorchCompileModel: transformer_options changes must not trigger recompiles.
+    return [("transformer_options" not in entry.name) for entry in guard_entries]
+
+
+def _inductor_options(mode, coordinate_descent_tuning):
+    """torch.compile refuses mode= together with options=, so expand the mode into options."""
+    opts = {}
+    if mode and mode != "default":
+        try:
+            opts.update(torch._inductor.list_mode_options(mode))
+        except Exception as e:
+            log.warning("[BlackwellTorchCompile] could not expand mode %s (%s)", mode, e)
+    opts["coordinate_descent_tuning"] = bool(coordinate_descent_tuning)
+    return opts
 
 
 class BlackwellTorchCompile:
@@ -41,28 +60,20 @@ class BlackwellTorchCompile:
         for k, v in _INDUCTOR_ENV.items():
             os.environ.setdefault(k, v)
 
-        if cutlass_backend:
-            os.environ["TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS"] = "ATEN,TRITON,CUTLASS"
-        try:
-            torch._inductor.config.coordinate_descent_tuning = coordinate_descent_tuning
-        except Exception:
-            pass
-
-        try:
-            m = model.clone(disable_dynamic=True)
-        except TypeError:
-            m = model.clone()
-
-        kwargs = {"backend": backend, "fullgraph": fullgraph, "dynamic": dynamic}
+        options = {}
         if backend == "inductor":
-            kwargs["mode"] = mode
+            options = _inductor_options(mode, coordinate_descent_tuning)
+            if cutlass_backend:
+                options["max_autotune_gemm_backends"] = "ATEN,TRITON,CUTLASS"
+        options["guard_filter_fn"] = _skip_transformer_options_guards
+
+        m = clone_for_weight_edit(model)
 
         if _HAS_COMPILE_HELPER:
-            set_torch_compile_wrapper(model=m, backend=backend, mode=mode if backend == "inductor" else None,
-                                       fullgraph=fullgraph, dynamic=dynamic)
+            set_torch_compile_wrapper(model=m, backend=backend, options=options, fullgraph=fullgraph, dynamic=dynamic)
         else:
             diff = m.get_model_object("diffusion_model")
-            compiled = torch.compile(diff, **kwargs)
+            compiled = torch.compile(diff, backend=backend, options=options, fullgraph=fullgraph, dynamic=dynamic)
             m.add_object_patch("diffusion_model", compiled)
         return (m,)
 
@@ -78,13 +89,19 @@ class ChannelsLastPatch:
 
     def patch(self, model, memory_format):
         fmt = torch.channels_last if memory_format == "channels_last" else torch.channels_last_3d
-        m = model.clone()
+        ndim = 4 if fmt is torch.channels_last else 5
+        m = clone_for_weight_edit(model)
         mm.load_models_gpu([m])
         diff = m.get_model_object("diffusion_model")
-        try:
-            diff.to(memory_format=fmt)
-        except RuntimeError:
-            pass
+        n = 0
+        # Only conv weights of the right rank can take the format; Module.to(memory_format=) raises
+        # on the first mismatching (e.g. Linear) parameter and leaves the rest untouched.
+        for sub in diff.modules():
+            w = getattr(sub, "weight", None)
+            if isinstance(sub, (torch.nn.Conv2d, torch.nn.Conv3d)) and isinstance(w, torch.Tensor) and w.dim() == ndim:
+                sub.weight.data = w.data.contiguous(memory_format=fmt)
+                n += 1
+        print(f"[ChannelsLastPatch] {memory_format} applied to {n} conv layers")
         return (m,)
 
 

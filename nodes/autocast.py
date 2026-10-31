@@ -1,6 +1,8 @@
 """Wrap UNet/DiT forward in torch.autocast. FP32 master weights, lower-precision compute."""
 import torch
 
+from ._common import chain_unet_wrapper, model_device_type
+
 
 class FP32AutocastWrapper:
     @classmethod
@@ -24,15 +26,15 @@ class FP32AutocastWrapper:
         if autocast_dtype == "off":
             return (m,)
         ac_dtype = self._DTYPES[autocast_dtype]
-        prev = m.model_options.get("model_function_wrapper")
+        device_type = model_device_type(m)  # "cuda", "xpu", "cpu", ...
 
-        def wrapper(apply_model, args):
-            with torch.autocast("cuda", dtype=ac_dtype, cache_enabled=cache_enabled):
-                if prev is not None:
-                    return prev(apply_model, args)
-                return apply_model(args["input"], args["timestep"], **args["c"])
+        def factory(call_next):
+            def wrapper(apply_model, args):
+                with torch.autocast(device_type, dtype=ac_dtype, cache_enabled=cache_enabled):
+                    return call_next(apply_model, args)
+            return wrapper
 
-        m.set_model_unet_function_wrapper(wrapper)
+        chain_unet_wrapper(m, factory)
         return (m,)
 
 
